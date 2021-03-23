@@ -1,0 +1,249 @@
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <WiFiAP.h>
+#include <PubSubClient.h>
+
+// WEB SERVER CONFIG
+WiFiServer server(80);
+const char* ssidEsp32     = "ESP32-Access-Point";
+const char* passwordEsp32 = "123456789";
+String header;
+
+// WIFI CONFIG
+String WIFI_SSID="";
+String WIFI_PASSWORD="";
+
+// MQTT CONFIG
+WiFiClient espClient;
+PubSubClient client(espClient);
+const char BROKER_IP[]="202.148.1.57";
+const int BROKER_PORT = 1883;
+const char CLIENT[]= "app-smartapp";
+const char CLIENT_PASSWORD[]= "041sPBJJfMlZfeXqBdP8A0jbXpVYnY";
+
+// CHANGE MODE CONF
+const int INTERRUPT_PIN = 0;
+bool isWebServer = true;
+volatile byte state = LOW;
+
+// SIGNAL CONFIGURATION
+String LED_BUILTIN_STATE = "off";
+const int LED_BUILTIN = 2;
+
+
+// MESSAGE TO BROKER
+long lastMsg = 0;
+long counter=0;
+char payload[512];
+
+void setupWebServer(){  
+  Serial.print("Setting Access Point ... ");
+  WiFi.softAP(ssidEsp32, passwordEsp32);
+  IPAddress IP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(IP);
+  server.begin();
+}
+
+void setupWifi() {  
+  Serial.println(WIFI_SSID);
+  Serial.println(WIFI_PASSWORD);
+  
+  char ssid[WIFI_SSID.length()+1];
+  char password[WIFI_PASSWORD.length()+1];
+
+  WIFI_SSID.toCharArray(ssid, WIFI_SSID.length()+1);
+  WIFI_PASSWORD.toCharArray(password, WIFI_PASSWORD.length()+1);
+
+  Serial.println("Connecting to ");
+  Serial.print("SSID : ");
+  Serial.println(ssid);
+  Serial.print("PASSWORD : ");
+  Serial.println(password);
+
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.println("IP address: ");
+  Serial.print(WiFi.localIP());
+  Serial.println("");
+}
+
+void setupMqttClient() {
+  client.setServer(BROKER_IP, BROKER_PORT);
+  client.setCallback(mqttCallback);
+}
+
+void handlePressBtn() {
+  state = !state;
+  if (state == HIGH) {
+    Serial.println("Button pressed");
+    isWebServer = !isWebServer;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_BUILTIN, OUTPUT); 
+  setupWebServer();
+  setupMqttClient();
+  // SETUP PUSH BOTTON
+  pinMode(INTERRUPT_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN), handlePressBtn, CHANGE);
+}
+
+void serverController () {
+  WiFiClient client = server.available();   // listen for incoming clients
+  
+  if (client) {                             // if you get a client,
+    Serial.println("New Client.");           // print a message out the serial port
+    String currentLine = "";                // make a String to hold incoming data from the client
+
+    while (client.connected()) {            // loop while the client's connected
+      if (client.available()) {             // if there's bytes to read from the client,
+        char c = client.read();     
+        Serial.write(c);                    // print it out the serial monitor
+        header += c;
+        if (c == '\n') {                    // if the byte is a newline character
+          if (currentLine.length() == 0) {
+            client.println("HTTP/1.1 200 OK");
+            client.println("Content-type:text/html");
+            client.println();
+
+            client.println();
+
+            if (header.indexOf("GET /connect")>=0) {
+              int idx1 = header.indexOf("ssid");
+              int idx2 = header.indexOf("&");
+              int idx3 = header.indexOf("password");
+              int idx4 = header.indexOf(" HTTP/1.1");
+              
+              
+              if (idx1>=0 && idx3>=0) {
+                if (idx1<idx3) {
+                  WIFI_SSID = header.substring(idx1+5,idx2);
+                  WIFI_PASSWORD = header.substring(idx3+9,idx4);
+                } else {
+                  WIFI_PASSWORD = header.substring(idx3+9,idx2);
+                  WIFI_SSID = header.substring(idx1+5,idx4);
+                }
+                Serial.println(WIFI_SSID);
+                Serial.println(WIFI_PASSWORD);
+
+                idx1 = WIFI_SSID.indexOf("%20");
+                while (idx1>=0){
+                  WIFI_SSID = WIFI_SSID.substring(0,idx1) +" "+ WIFI_SSID.substring(idx1+3,WIFI_SSID.length());
+                  idx1 = WIFI_SSID.indexOf("%20");
+                }
+
+                idx1 = WIFI_PASSWORD.indexOf("%20");
+                while (idx1>=0){
+                  WIFI_PASSWORD = WIFI_PASSWORD.substring(0,idx1) +" "+ WIFI_PASSWORD.substring(idx1+3,WIFI_PASSWORD.length());
+                  idx1 = WIFI_PASSWORD.indexOf("%20");
+                }
+              }
+            }
+            
+            client.print("<div>SSID : " + WIFI_SSID + " </div>");
+            client.print("<div>Password : " + WIFI_PASSWORD + " </div>");
+   
+            // Serial.println(header);
+            // Serial.println("========================================================");
+            break;
+          } else {    // if you got a newline, then clear currentLine:
+            currentLine = "";
+          }
+        } else if (c != '\r') {  // if you got anything else but a carriage return character,
+          currentLine += c;      // add it to the end of the currentLine
+        }
+
+      }
+    }
+    
+    // close the connection:
+    header="";
+    client.stop();
+    Serial.println("Client Disconnected.");
+  }
+}
+
+
+void mqttCallback(char* topic, byte* message, unsigned int length) {
+  Serial.print("Message arrived on topic: ");
+  Serial.print(topic);
+  Serial.print(". Message: ");
+  String messageTemp;
+  
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)message[i]);
+    messageTemp += (char)message[i];
+  }
+  Serial.println(messageTemp);
+
+  if (String(topic) == "perangkat1/switch") {
+    Serial.print("Changing output to ");
+    if(messageTemp == "{\"payload\":{\"message\":\"on\"}}"){
+      Serial.println("on");
+      digitalWrite(LED_BUILTIN, HIGH);
+    }
+    else if(messageTemp == "{\"payload\":{\"message\":\"off\"}}"){
+      Serial.println("off");
+      digitalWrite(LED_BUILTIN, LOW);
+    }
+  }
+}
+
+
+void connectToBroker() {
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Attempt to connect
+    if (client.connect("esp32client", CLIENT, CLIENT_PASSWORD)) {
+      Serial.println("connected");
+      // Subscribe
+      client.subscribe("perangkat1/switch");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+void loop(){
+  long now = millis();
+
+  if (isWebServer == true) {
+    serverController();
+    digitalWrite(LED_BUILTIN, HIGH);
+  } else {
+    digitalWrite(LED_BUILTIN, LOW);
+    if (WiFi.status()!=WL_CONNECTED) {
+      setupWifi();
+    } else if (WiFi.status()==WL_CONNECTED) {
+      if (!client.connected()) {
+        connectToBroker();
+      }
+      client.loop();
+      if (now-lastMsg>5000) {
+        float humidity;
+        lastMsg = now;
+        counter = (counter >= 1000) ? 0 : counter;
+        humidity = sin(counter);
+        sprintf(payload,"{\"payload\":{\"humidity\":%f}}", humidity);
+        client.publish("perangkat1", payload);
+        Serial.println(payload);
+        digitalWrite(LED_BUILTIN, HIGH);
+        counter++;
+      }
+    }
+  }
+}
