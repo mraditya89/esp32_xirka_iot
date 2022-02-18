@@ -1,0 +1,81 @@
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEServer.h>
+
+#define SERVICE_UUID        "515fdb97-24ae-4d68-88e0-e6891d6946d7"
+#define CHARACTERISTIC_UUID "7351d823-5dfe-4221-8c71-37860dd2745c"
+
+BLEServer* pServer = NULL;
+BLECharacteristic* pCharacteristic = NULL;
+bool deviceConnected = false;
+
+char deviceName[64] = "kompor01";
+char id_pelanggan[32] = "100000009001";
+int T = 0;      
+char payload[512];
+
+class MyServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) {
+      Serial.println("Client connection established");
+      deviceConnected = true;
+    };
+
+    void onDisconnect(BLEServer* pServer) {
+      Serial.println("Client connection destroyed");
+      deviceConnected = false;
+    }
+};
+
+
+void generatePayload(){
+   int W = random(0, 20);
+   int Wi = random(0, 30);
+   T += 5;
+   sprintf(payload,"{\"id\":%s, \"W\":%d, \"Wi\":%d, \"T\":%d}", id_pelanggan, W, Wi, T);
+   Serial.println(payload);
+   pCharacteristic->setValue(payload);
+}
+
+
+void setup() {
+  // put your setup code here, to run once:
+  Serial.begin(115200);
+  Serial.println("Starting BLE work!");
+
+  // Create the BLE Device 
+  BLEDevice::init(deviceName);
+  
+  // Crete the BLE Server
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+    
+  // Create BLE Service
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+
+  // Create BLE Characteristic
+  pCharacteristic = pService->createCharacteristic(
+                       CHARACTERISTIC_UUID,
+                       BLECharacteristic::PROPERTY_READ |
+                       BLECharacteristic::PROPERTY_WRITE
+                    );
+  
+  // Start Service  
+  pService->start();
+  
+  // Start Advertising
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06);  // functions that help with iPhone connections issue
+  pAdvertising->setMinPreferred(0x12);
+  BLEDevice::startAdvertising();
+  Serial.println("Characteristic defined! Now you can read it in your phone!");
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  if (deviceConnected){
+      generatePayload();
+      delay(10000);  
+  }
+}
